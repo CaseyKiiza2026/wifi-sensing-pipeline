@@ -7,7 +7,7 @@ VALID_SECURITY = {"Open","WEP","WPA","WPA2","WPA3","WPA2/WPA3"}
 mac_regex = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 
 def normalize_band(band):
-    band = band.replace(" ", "").lower()
+    band = (band or "").replace(" ", "").lower()
     if band.startswith("2.4"):
         return "2.4GHz"
     if band.startswith("5"):
@@ -16,7 +16,7 @@ def normalize_band(band):
         return "6GHz"
     return None
 
-#def valid_band(band):
+
 def channel_in_possible_range(channel: int, band: str) -> bool:
     if band == "2.4GHz":
         return 1 <= channel <= 14
@@ -26,7 +26,7 @@ def channel_in_possible_range(channel: int, band: str) -> bool:
         return 1 <= channel <= 233
     return False
 
-#def valid_security(sec):
+
 def channel_is_standard(channel: int, band: str) -> bool:
     if band == "2.4GHz":
         return 1 <= channel <= 14
@@ -45,7 +45,7 @@ def channel_is_standard(channel: int, band: str) -> bool:
     return False
 
 def normalize_security(sec):
-    sec = sec.upper()
+    sec = (sec or "").upper()
     if "WPA3" in sec and "WPA2" in sec:
         return "WPA2/WPA3"
     if "WPA3" in sec:
@@ -60,11 +60,6 @@ def normalize_security(sec):
         return "Open"
     return None
 
-
-def preprocess(scan):
-    ts_iso = to_iso(scan.get("timestamp"))
-    if ts_iso is None:
-        return None
 def to_iso(ts):
     if ts is None or ts == "":
         return None  # strict: missing is invalid
@@ -85,51 +80,76 @@ def to_iso(ts):
             return None  # strict: bad is invalid
 
     return None
-    # BSSID validation
+
+def validate_bssid(scan):
     bssid = scan.get("bssid")
     if not bssid or not mac_regex.match(bssid):
         return None
+    return bssid.lower()
 
-    # RSSI validation
+def validate_rssi(scan):
     try:
         rssi = int(scan.get("rssi"))
-        if not (-100 <= rssi <= 0):
-            return None
-    except:
-        return None
-    
-    # Normalize band
-    band = normalize_band(scan.get("band",""))
-    if not band:
-        return None
+        if -100 <= rssi <= 0:
+            return rssi
+    except (TypeError, ValueError):
+        pass
+    return None
 
-    # Channel + Validate channel for band
+def validate_band(scan):
+    band = normalize_band(scan.get("band", ""))
+    return band  # already returns None if invalid
+
+def validate_channel(scan, band):
     try:
         channel = int(scan.get("channel"))
-    except:
-        return None
-   
-    
-    # Reject impossible physics
+    except (TypeError, ValueError):
+        return None, None  # (channel, channel_valid)
+
     if not channel_in_possible_range(channel, band):
+        return None, None
+
+    channel_valid = channel_is_standard(channel, band)
+    return channel, channel_valid
+
+def validate_security(scan):
+    return normalize_security(scan.get("security", ""))
+
+def preprocess(scan):
+    ts_iso = to_iso(scan.get("timestamp"))
+    if ts_iso is None:
         return None
-    
 
-    # Normalize security
-    security = normalize_security(scan.get("security",""))
-    if not security:
+    bssid = validate_bssid(scan)
+    if bssid is None:
         return None
 
-    cleaned = {
-    "ssid": scan.get("ssid",""),
-    "bssid": bssid.lower(),
-    "rssi": rssi,
-    "channel": channel,
-    "band": band,
-    "security": security,
-    "channel_valid": channel_valid,   # ← truth label
-    "timestamp": ts_iso
-}
+    rssi = validate_rssi(scan)
+    if rssi is None:
+        return None
 
+    band = validate_band(scan)
+    if band is None:
+        return None
 
-    return cleaned
+    channel, channel_valid = validate_channel(scan, band)
+    if channel is None:
+        return None
+
+    security = validate_security(scan)
+    if security is None:
+        return None
+
+    return {
+        "ssid": scan.get("ssid", ""),
+        "bssid": bssid,
+        "rssi": rssi,
+        "channel": channel,
+        "band": band,
+        "security": security,
+        "channel_valid": channel_valid,
+        "timestamp": ts_iso,
+    }
+
+  
+
